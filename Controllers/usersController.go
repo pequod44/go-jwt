@@ -103,7 +103,7 @@ func Login(c *gin.Context) {
 
 	//Send it back
 	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie("Autorization", tokenString, 3600*24*30, "", "", false, true)
+	c.SetCookie("Authorization", tokenString, 3600*24*30, "", "", false, true)
 
 	c.JSON(http.StatusOK, gin.H{
 		"token": tokenString,
@@ -111,7 +111,18 @@ func Login(c *gin.Context) {
 }
 
 func Validate(c *gin.Context) {
-	// user, _ := c.Get("user")
+	// // Извлечение пользователя из контекста
+	// user, exists := c.Get("user")
+	// if !exists {
+	// 	c.AbortWithStatus(http.StatusUnauthorized)
+	// 	return
+	// }
+
+	// // Проверка на существование пользователя
+	// if user == nil {
+	// 	c.AbortWithStatus(http.StatusUnauthorized)
+	// 	return
+	// }
 
 	c.JSON(http.StatusOK, gin.H{
 		"message": "I'm logged in",
