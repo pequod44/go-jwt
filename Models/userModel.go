@@ -2,8 +2,8 @@ package models
 
 import "gorm.io/gorm"
 
-type User struct {
+type RefreshToken struct {
 	gorm.Model
-	Email    string `gorm:"unique"`
-	Password string
+	UserID    string `gorm:"unique"`
+	TokenHash string
 }

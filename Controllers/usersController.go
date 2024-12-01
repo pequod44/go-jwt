@@ -1,6 +1,9 @@
 package controllers
 
 import (
+	"crypto/sha512"
+	"encoding/base64"
+	"fmt"
 	"net/http"
 	"os"
 	"time"
@@ -9,111 +12,166 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	initializers "github.com/pequod44/test-go-jwt/Initializers"
 	models "github.com/pequod44/test-go-jwt/Models"
-	"golang.org/x/crypto/bcrypt"
 )
 
-func Sign_up(c *gin.Context) {
-	//Get the email/pass of req body
-	var body struct {
-		Email    string
-		Password string
-	}
+func send_email() {
+	fmt.Println("Email sent to user")
+}
 
-	if c.Bind(&body) != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Failed to read body",
-		})
-
-		return
+func generateAccessToken(userID string, Clients_IP string) (string, error) {
+	claims := jwt.MapClaims{
+		"user_id":    userID,
+		"exp":        time.Now().Add(15 * time.Minute).Unix(),
+		"clients_ip": Clients_IP,
 	}
-	// Hash pass
-	hash, err := bcrypt.GenerateFromPassword([]byte(body.Password), 10)
+	token := jwt.NewWithClaims(jwt.SigningMethodHS512, claims)
+	return token.SignedString([]byte(os.Getenv("KEY")))
+}
+
+func generateRefreshToken(UserID string, Clients_IP string) (string, string, error) {
+	refreshToken := jwt.NewWithClaims(jwt.SigningMethodHS512, jwt.MapClaims{
+		"sub":        UserID,
+		"exp":        time.Now().Add(time.Hour * 24).Unix(),
+		"clients_ip": Clients_IP,
+	})
+
+	// Sign and get the complete encoded token as a string using the key
+	refreshTokenString, err := refreshToken.SignedString([]byte(os.Getenv("KEY")))
 
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Failed to hash password",
-		})
+		fmt.Println("Failed to sign refresh token")
 	}
-	// Create the user
-	user := models.User{Email: body.Email, Password: string(hash)}
 
-	result := initializers.DB.Create(&user)
+	// Hash pass
+	hashed := sha512.Sum512([]byte(refreshTokenString))
+	hashedToken := base64.StdEncoding.EncodeToString(hashed[:])
+	return refreshTokenString, string(hashedToken), nil
+}
+
+func GenerateTokens(c *gin.Context) {
+	var body struct {
+		UserID string `json:"UserID"`
+	}
+	if err := c.BindJSON(&body); err != nil {
+		c.JSON(400, gin.H{"error": "Invalid request"})
+		return
+	}
+
+	accessToken, err := generateAccessToken(body.UserID, c.ClientIP())
+	if err != nil {
+		c.JSON(500, gin.H{"error": "Failed to create Access Token"})
+		return
+	}
+
+	refreshToken, hashedRefreshToken, err := generateRefreshToken(body.UserID, c.ClientIP())
+	if err != nil {
+		c.JSON(500, gin.H{"error": "Failed to create Refresh Token"})
+		return
+	}
+
+	// Record refresh token in db
+	var token models.RefreshToken
+	initializers.DB.First(&token, "user_id = ?", body.UserID)
+
+	if token.ID == 0 {
+		token.UserID = body.UserID
+	}
+	token.TokenHash = hashedRefreshToken
+	result := initializers.DB.Save(&token)
 
 	if result.Error != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Failed to create user",
+			"error": "Failed to record token",
 		})
+		return
 	}
 
-	// Respond
-
-	c.JSON(http.StatusOK, gin.H{})
+	c.JSON(200, gin.H{
+		"access_token":  accessToken,
+		"refresh_token": refreshToken,
+	})
 }
 
-func Login(c *gin.Context) {
-	// Get the email and pass off req body
+func RefreshTokens(c *gin.Context) {
 	var body struct {
-		Email    string
-		Password string
+		RefreshToken string `json:"RefreshToken"`
 	}
-
-	if c.Bind(&body) != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Failed to read body",
-		})
-
+	if err := c.BindJSON(&body); err != nil {
+		c.JSON(400, gin.H{"error": "Invalid request"})
 		return
 	}
-	//Look up requested user
-	var user models.User
-	initializers.DB.First(&user, "email = ?", body.Email)
-	if user.ID == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Invalid email",
-		})
 
-		return
-	}
-	//Compare sent in pass with saved pass has
-	err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(body.Password))
+	// Decode/validate it
+	token, err := jwt.Parse(body.RefreshToken, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
 
+		// hmacSampleSecret is a []byte containing your secret, e.g. []byte("my_secret_key")
+		return []byte(os.Getenv("KEY")), nil
+	})
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Invalid email or password",
-		})
-
+		c.AbortWithStatus(http.StatusUnauthorized)
 		return
-	}
-	//Generate a jwt token
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub": user.ID,
-		"exp": time.Now().Add(time.Hour * 24 * 30).Unix(),
-	})
 
-	// Sign and get the complete encoded token as a string using the secret
-	tokenString, err := token.SignedString([]byte(os.Getenv("KEY")))
-
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Failed to create Token",
-		})
-
-		return
 	}
 
-	//Send it back
-	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie("Autorization", tokenString, 3600*24*30, "", "", false, true)
+	if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
+		// Check the experation
+		if float64(time.Now().Unix()) > claims["exp"].(float64) {
+			c.AbortWithStatus(http.StatusUnauthorized)
+			return
+		}
+		// Find the user with token sub
+		var rToken models.RefreshToken
+		initializers.DB.First(&rToken, "user_id = ?", claims["sub"])
 
-	c.JSON(http.StatusOK, gin.H{
-		"token": tokenString,
-	})
-}
+		if rToken.ID == 0 {
+			c.AbortWithStatus(http.StatusUnauthorized)
+			return
+		}
+		//Hash sent in token
+		hashed := sha512.Sum512([]byte(body.RefreshToken))
+		hashedToken := base64.StdEncoding.EncodeToString(hashed[:])
 
-func Validate(c *gin.Context) {
-	// user, _ := c.Get("user")
+		// Hash check
+		if hashedToken != rToken.TokenHash {
+			c.AbortWithStatus(http.StatusUnauthorized)
+			return
+		}
+		// Generate new pair
+		accessToken, err := generateAccessToken(claims["sub"].(string), c.ClientIP())
+		if err != nil {
+			c.JSON(500, gin.H{"error": "Failed to create Access Token"})
+			return
+		}
+		refreshToken, hashedRefreshToken, err := generateRefreshToken(claims["sub"].(string), c.ClientIP())
+		if err != nil {
+			c.JSON(500, gin.H{"error": "Failed to create Refresh Token"})
+			return
+		}
+		// Update refresh token in db
+		rToken.TokenHash = hashedRefreshToken
+		result := initializers.DB.Save(&rToken)
 
-	c.JSON(http.StatusOK, gin.H{
-		"message": "I'm logged in",
-	})
+		if result.Error != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "Failed to record token",
+			})
+			return
+		}
+		// IP check
+		if c.ClientIP() != claims["clients_ip"] {
+			send_email()
+		}
+
+		c.JSON(200, gin.H{
+			"access_token":  accessToken,
+			"refresh_token": refreshToken,
+		})
+
+	} else {
+		c.AbortWithStatus(http.StatusUnauthorized)
+	}
+
 }
