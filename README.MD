@@ -16,7 +16,7 @@
   - Генерация новой пары Access и Refresh токенов.
   - Обновление хэша Refresh токена в базе данных.
 - **Проверка IP-адреса**:
-  - Отправка уведомления при изменении IP-адреса клиента.
+  - Отправка уведомления при изменении IP-адреса пользователя.
 
 ## Используемые технологии
 - **Язык программирования**: Go
@@ -33,9 +33,9 @@
 2. Установите зависимости:
    ```bash
    go mod tidy
-3. Настройте переменные окружения в файле .env:
-    PORT=3000
-    dsn := "host=localhost user=gorm password=gorm dbname=gorm port=9920 sslmode=disable
+3. Настройте переменные окружения в файле .env:<br>
+    PORT=3000<br>
+    dsn := "host=localhost user=gorm password=gorm dbname=gorm port=9920 sslmode=disable<br>
     KEY=your_secret_key
 4. Запустите сервер:
    ```bash
