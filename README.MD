@@ -28,5 +28,15 @@
 ## Установка и запуск
 1. Клонируйте репозиторий:
    ```bash
-   git clone https://github.com/<ваш-репозиторий>.git
-   cd <папка-проекта>
+   git clone https://github.com/pequod44.git/go-jwt
+   cd go-jwt
+2. Установите зависимости:
+   ```bash
+   go mod tidy
+3. Настройте переменные окружения в файле .env:
+   PORT=3000
+   dsn := "host=localhost user=gorm password=gorm dbname=gorm port=9920 sslmode=disable
+   KEY=your_secret_key
+4. Запустите сервер:
+   ```bash
+   go run main.go
